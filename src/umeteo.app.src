@@ -1,0 +1,7 @@
+%% vim: et ts=4 sw=4 ft=erlang
+{application, umeteo, [
+    {description, "UMB REST API Server"},
+    {vsn, git},
+    {registered, []},
+    {applications, [kernel, stdlib]},
+    {mod, {umeteo_app, []}}]}.
