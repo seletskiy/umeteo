@@ -12,6 +12,7 @@ start(_Type, _Args) ->
     application:start(umb),
     application:start(ranch),
     application:start(crypto),
+    application:start(cowlib),
     application:start(cowboy),
     sl:install(log),
     sl:info("init"),
