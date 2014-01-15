@@ -38,16 +38,22 @@ resource_exists(Req, State) ->
     end.
 
 get_json(Req, State) ->
-    {{DevId, Timestamp, Status}, _} = cowboy_req:meta(device, Req),
+    {{DevId, Timestamp, Status, ConnectedTo}, _} = cowboy_req:meta(device, Req),
     EncodedStatus = case Status of
         ok ->
             <<"ok">>;
+        offline ->
+            <<"offline">>;
         {error, Error} ->
             [{error, iolist_to_binary(io_lib:format("~999p", [Error]))}]
     end,
+    {Host, Port} = ConnectedTo,
     {jsonx:encode([
         {values, prepare_values(DevId)},
         {meta, [
+            {connected_to, [
+                {host, iolist_to_binary(Host)}, {port, Port}
+            ]},
             {age, timestamp() - Timestamp},
             {status, EncodedStatus}]}]),
         Req, State}.
@@ -58,7 +64,7 @@ prepare_values(DevId) ->
 
 prepare_values(_DevId, [], Result) ->
     lists:reverse(Result);
-    
+
 prepare_values(DevId, [[ChanId, Timestamp, Value] | Tail], Result) ->
     [{_, ChanInfo}] = ets:lookup(umeteo_channels, {DevId, ChanId}),
     ChanInfo2 = lists:keydelete(mv_type, 1, ChanInfo),

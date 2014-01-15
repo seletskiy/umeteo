@@ -23,6 +23,7 @@
     master,
     device,
     bus,
+    interval,
     id
 }).
 
@@ -39,11 +40,14 @@ init([Id, Host, Port, Timeout, Interval]) ->
         ]]),
     link(BusConnection),
     gen_server:cast(self(), {start, Interval}),
+    BinId = atom_to_binary(Id, utf8),
+    ets:insert(umeteo_devices, {BinId, timestamp(), offline, {Host, Port}}),
     {ok, #state{
         master = umb_device:new(15, 1),
         device = umb_device:new(2, 1),
         bus = BusConnection,
-        id = atom_to_binary(Id, utf8)}}.
+        interval = Interval,
+        id = BinId}}.
 
 %% @hidden
 handle_call(_Message, _From, State) ->
@@ -51,11 +55,17 @@ handle_call(_Message, _From, State) ->
 
 %% @hidden
 handle_cast({start, Interval}, State) ->
-    ets:insert(umeteo_devices, {State#state.id, timestamp(), ok}),
-    read_channels_list(State),
-    sl:info("~s - starting data retrieval", [State#state.id]),
-    timer:send_after(Interval, self(), {refresh, Interval}),
-    {noreply, State};
+    case read_channels_list(State) of
+        ok ->
+            sl:info("~s - starting data retrieval", [State#state.id]),
+            timer:send_after(Interval, self(), {refresh, Interval}),
+            {noreply, State};
+        _Error ->
+            sl:crit("~s - can not read channels list, starting failover", [
+                State#state.id]),
+            timer:sleep(State#state.interval),
+            {stop, failover, State}
+    end;
 handle_cast(_Message, State) ->
     {noreply, State}.
 
@@ -65,8 +75,15 @@ handle_info({refresh, Interval}, State) ->
     ets:update_element(umeteo_devices, State#state.id, [
         {2, timestamp()},
         {3, Status}]),
-    timer:send_after(Interval, self(), {refresh, Interval}),
-    {noreply, State};
+    case Status of
+        ok ->
+            timer:send_after(Interval, self(), {refresh, Interval}),
+            {noreply, State};
+        {error, {source_error, closed, _}} ->
+            sl:crit("no connection to server, starting failover"),
+            {stop, failover, State}
+    end;
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -93,10 +110,16 @@ request(Request, State) ->
 read_channels_list(State) ->
     sl:info("~s - reading channels list", [
         State#state.id]),
-    {ok, {_, ChBlocks}} = request(umb_request:info_cnl_num(), State),
-    sl:info("~s - found ~B channel blocks", [
-        State#state.id, ChBlocks]),
-    read_channels_info(ChBlocks, State).
+    case request(umb_request:info_cnl_num(), State) of
+        {ok, {_, ChBlocks}} ->
+            sl:info("~s - found ~B channel blocks", [
+                State#state.id, ChBlocks]),
+            read_channels_info(ChBlocks, State);
+        Error ->
+            sl:error("~s - error while requesting channels list", [
+                State#state.id]),
+            Error
+    end.
 
 read_channels_info(BlockNumber, State) ->
     read_channels_info(BlockNumber, BlockNumber, State).
@@ -105,11 +128,16 @@ read_channels_info(0, _Total, _State) ->
     ok;
 
 read_channels_info(Current, Total, State) ->
-    {ok, List} = request(umb_request:info_cnl_list(Total - Current), State),
-    sl:debug("~s - processing ~B channels: ~999p", [
-        State#state.id, length(List), List]),
-    process_channels_list(List, State),
-    read_channels_info(Current - 1, Total, State).
+    case request(umb_request:info_cnl_list(Total - Current), State) of
+        {ok, List} ->
+            sl:debug("~s - processing ~B channels: ~999p", [
+                State#state.id, length(List), List]),
+            process_channels_list(List, State),
+            read_channels_info(Current - 1, Total, State);
+        Error ->
+            sl:error("~s - error while requesting channels", [State#state.id]),
+            Error
+    end.
 
 process_channels_list([], _State) ->
     ok;
@@ -119,10 +147,15 @@ process_channels_list([ChanId | Tail], State) ->
         [] ->
             sl:debug("~s - processing channel <~B>", [
                 State#state.id, ChanId]),
-            {ok, Info} = request(umb_request:info_cnl_full(ChanId),
-                State),
-            ets:insert(umeteo_channels, {{State#state.id, ChanId},
-                Info});
+            case request(umb_request:info_cnl_full(ChanId), State) of
+                 {ok, Info} ->
+                    ets:insert(umeteo_channels, {{State#state.id, ChanId},
+                        Info});
+                Error ->
+                    sl:error("~s - error while processing channel ~B", [
+                        State#state.id, ChanId]),
+                    Error
+            end;
         [_Cached] ->
             ok
     end,
@@ -154,7 +187,14 @@ process_channels_value(_, [], []) ->
 
 process_channels_value(DevId, [ChanId | ChanTail], [Value | ValuesTail]) ->
     ets:insert(umeteo_values, {{DevId, ChanId}, timestamp(), Value}),
+    notify_listeners(pg2:get_members(umeteo_listeners), {ChanId, Value}),
     process_channels_value(DevId, ChanTail, ValuesTail).
+
+notify_listeners([], _Data) ->
+    ok;
+notify_listeners([Pid | Tail], Data) ->
+    Pid ! {update, Data},
+    notify_listeners(Tail, Data).
 
 timestamp() ->
     {Mega, Secs, Micro} = now(),

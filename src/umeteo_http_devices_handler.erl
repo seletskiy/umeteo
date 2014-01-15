@@ -31,8 +31,7 @@ get_json(Req, State) ->
     {Path, _} = cowboy_req:path(Req),
     BaseUrl = <<HostUrl/binary, Path/binary>>,
     {jsonx:encode([{devices,
-        prepare_devices(BaseUrl,
-            ets:match(umeteo_devices, '$1'))}]),
+        prepare_devices(BaseUrl, ets:match(umeteo_devices, '$1'))}]),
         Req, State}.
 
 prepare_devices(BaseUrl, Devices) ->
@@ -41,19 +40,26 @@ prepare_devices(BaseUrl, Devices) ->
 prepare_devices(_BaseUrl, [], Result) ->
     lists:reverse(Result);
 
-prepare_devices(BaseUrl, [[{DevId, Timestamp, Status}] | Tail], Result) ->
+prepare_devices(BaseUrl, [[{DevId, Timestamp, Status, ConnectedTo}] | Tail],
+        Result) ->
     EncodedStatus = case Status of
         ok ->
             <<"ok">>;
+        offline ->
+            <<"offline">>;
         {error, Error} ->
             [{error, iolist_to_binary(io_lib:format("~999p", [Error]))}]
     end,
     ValuesUrl = <<BaseUrl/binary, "/", DevId/binary, "/values">>,
+    SubscribeUrl = <<(binary:replace(ValuesUrl,
+        <<"http://">>, <<"ws://">>))/binary, "/subscribe">>,
+    {Host, Port} = ConnectedTo,
     prepare_devices(BaseUrl, Tail, [[
         {id, DevId},
         {age, timestamp() - Timestamp},
         {status, EncodedStatus},
-        {links, [{values, ValuesUrl}]}] | Result]).
+        {connected_to, [{host, iolist_to_binary(Host)}, {port, Port}]},
+        {links, [{values, ValuesUrl}, {subscribe, SubscribeUrl}]}] | Result]).
 
 timestamp() ->
     {Mega, Secs, Micro} = now(),

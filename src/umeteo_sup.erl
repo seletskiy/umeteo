@@ -14,9 +14,6 @@ start_link(Config) ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, [Config]).
 
 init([Config]) ->
-    ets:new(umeteo_devices, [public, named_table]),
-    ets:new(umeteo_channels, [public, named_table]),
-    ets:new(umeteo_values, [public, named_table]),
     {port, ListenPort} = lists:keyfind(port, 1, Config),
     {nb_accept, NbAccept} = lists:keyfind(nb_accept, 1, Config),
     {devices_conf, DevicesConfig} = lists:keyfind(devices_conf, 1, Config),
@@ -24,8 +21,10 @@ init([Config]) ->
     Routes = cowboy_router:compile([
         {'_', [
             {"/v1/devices", umeteo_http_devices_handler, []},
-            {"/v1/devices/:dev_id/values", umeteo_http_values_handler, []}
+            {"/v1/devices/:dev_id/values", umeteo_http_values_handler, []},
+            {"/v1/devices/:dev_id/values/subscribe", umeteo_http_values_subscribe, []}
         ]}]),
+    pg2:create(umeteo_listeners),
     {ok, {{one_for_one, 5, 60}, [
         {umeteo_dev_sup,
             {umeteo_dev_sup, start_link, [DevicesConfig]},
