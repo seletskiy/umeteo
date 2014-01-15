@@ -5,10 +5,10 @@
 -created_by('Stanislav Seletskiy <s.seletskiy@gmail.com>').
 
 -export([
-    start_link/4
+    start_link/5
 ]).
 
-start_link(Id, Upstream, Timeout, Interval) ->
+start_link(Id, Upstream, Timeout, Interval, Channels) ->
     LastServer = case ets:lookup(umeteo_devices, Id) of
         [] -> nil;
         [{_, _, _, L}] -> L
@@ -20,7 +20,8 @@ start_link(Id, Upstream, Timeout, Interval) ->
         Id, NewUpstream, TotalWeight, Random),
     sl:info("~s - starting connection to ~s:~B (weight ~.2f)",
         [Id, NewHost, NewPort, NewWeight]),
-    umeteo_dev_mon:start_link(Id, NewHost, NewPort, Timeout, Interval).
+    umeteo_dev_mon:start_link(Id, NewHost, NewPort, Timeout, Interval,
+        Channels).
 
 normalize_upstream(Upstream, LastServer) ->
     normalize_upstream(Upstream, LastServer, 0, []).

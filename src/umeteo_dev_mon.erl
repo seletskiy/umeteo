@@ -7,7 +7,7 @@
 -behaviour(gen_server).
 
 -export([
-    start_link/5
+    start_link/6
 ]).
 
 -export([
@@ -24,15 +24,18 @@
     device,
     bus,
     interval,
+    additional_channels,
     id
 }).
 
-start_link(Id, Host, Port, Timeout, Interval) ->
-    gen_server:start_link(?MODULE, [Id, Host, Port, Timeout, Interval], []).
+start_link(Id, Host, Port, Timeout, Interval, Channels) ->
+    gen_server:start_link(?MODULE,
+        [Id, Host, Port, Timeout, Interval, Channels], []).
 
 %% @hidden
-init([Id, Host, Port, Timeout, Interval]) ->
+init([Id, Host, Port, Timeout, Interval, Channels]) ->
     sl:info("~p - connecting to ~s:~B", [Id, Host, Port]),
+    sl:info("~p - additional channels: ~p", [Id, Channels]),
     {ok, BusConnection} = umb_bus:connect(Id, umb_transport_tcp_nokeep, [
         Host, Port, [
             {inet, [{send_timeout, Timeout}]},
@@ -47,6 +50,7 @@ init([Id, Host, Port, Timeout, Interval]) ->
         device = umb_device:new(2, 1),
         bus = BusConnection,
         interval = Interval,
+        additional_channels = Channels,
         id = BinId}}.
 
 %% @hidden
@@ -124,8 +128,8 @@ read_channels_list(State) ->
 read_channels_info(BlockNumber, State) ->
     read_channels_info(BlockNumber, BlockNumber, State).
 
-read_channels_info(0, _Total, _State) ->
-    ok;
+read_channels_info(0, _Total, State) ->
+    process_channels_list(State#state.additional_channels, State);
 
 read_channels_info(Current, Total, State) ->
     case request(umb_request:info_cnl_list(Total - Current), State) of
